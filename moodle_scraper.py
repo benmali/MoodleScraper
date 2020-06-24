@@ -4,6 +4,10 @@ import events_db as db
 import google_calendar as gc
 
 
+class HttpError(Exception):
+    pass
+
+
 class MoodleEvent:
     def __init__(self, name, date, time, status):
         self.name = name
@@ -12,7 +16,7 @@ class MoodleEvent:
         self.status = status
 
     def __repr__(self):
-        return "({}, {}, {}, {})".format(self.name,self.date,self.time,self.status)
+        return "({}, {}, {}, {})".format(self.name, self.date, self.time, self.status)
 
 
 def moodle_tlv(username, user_id, password):
@@ -44,36 +48,37 @@ def moodle_tlv(username, user_id, password):
         d=session.post("https://moodle.tau.ac.il/auth/saml2/sp/saml2-acs.php/moodle.tau.ac.il", cookies=session.cookies, headers=header, data=payload)
         # passed authentication
         main = session.get("https://moodle.tau.ac.il/")
+        moodle_events = []
+
         soup = BeautifulSoup(main.text,"html.parser")
         elements = soup.select(".courselink a") # finds all elements with class courselink in HTML file
         links = [elements[i].get("href") for i in range(len(elements))]  # all the course links
+        pages = [BeautifulSoup(session.get(link).text, "html.parser") for link in links]  # actual course pages
+        for page in pages:
+            title = page.find("title").string
+            activities = page.select(".activityinstance a")  # All activities in course page
+            course_assignment_links = [task.get("href") for task in activities if
+                                      "https://moodle.tau.ac.il/mod/assign" in task.get("href")]  # only relevant links
+            course_assignment_pages = [BeautifulSoup(session.get(assignment).text, "html.parser") for assignment in
+                         course_assignment_links]  # actual assignment pages
 
-        pages = [BeautifulSoup(session.get(link).text,"html.parser") for link in links]  # actual course pages
-        activities = [(pages[i].find("title").string, pages[i].select(".activityinstance a")) for i in range(len(pages))]  # all rows of specific course
-        assignments = []
-        for activity in activities:
-                title = activity[0]
-                course_assignments = [task.get("href") for task in activity[1] if "https://moodle.tau.ac.il/mod/assign" in task.get("href")]  # adds to assignments if has /assign suffix
-                pages = [BeautifulSoup(session.get(assignment).text, "html.parser") for assignment in course_assignments]
-                assignments.append((title,pages))
-        moodle_events = []
-        for course in assignments:
-                for page in course[1]:  # course[1] is the assignment list for this course
-                        status = page.find("td",class_="submissionstatussubmitted cell c1 lastcol")
-                        tags = page.find_all("tr")
-                        for date in tags:
-                                if "עד לתאריך" in str(date):
-                                        nd = date.text.strip().split(",")
-                                        nd[0] = nd[0][9:].strip()  # date
-                                        nd[1] = nd[1][1:].strip()  # time
-                                        new_date = db.fix_date_format(nd[0])
-                                        # create MoodleEvent object and add to moodle_events list
-                                        if status:  # status is None if assignments hasn't been submitted yet
-                                                moodle_events.append(MoodleEvent(course[0].strip(), new_date,nd[1].strip(),status.text))
-                                        else:
-                                                moodle_events.append(MoodleEvent(course[0].strip(), new_date,nd[1].strip(),status))
 
-                                        break
+            for assignment_page in course_assignment_pages:  # course[1] is the assignment list for this course
+                status = assignment_page.find("td",class_="submissionstatussubmitted cell c1 lastcol")
+                tags = assignment_page.find_all("tr")
+                assignment_title = assignment_page.find("span", id="maincontent").findNext("h2").string
+                for date in tags:
+                    if "עד לתאריך" in str(date):
+                        nd = date.text.strip().split(",")
+                        date = db.fix_date_format(nd[0][9:].strip())
+                        time = nd[1][1:].strip()  # time
+                        # create MoodleEvent object and add to moodle_events list
+                        if status:  # status is None if assignments hasn't been submitted yet
+                            moodle_events.append(MoodleEvent(title + " " + assignment_title, date, time, status.text))
+                        else:
+                            moodle_events.append(MoodleEvent(title + " " + assignment_title, date, time, status))
+
+                        break
         return moodle_events
 
 
@@ -82,17 +87,17 @@ def create_events(moodle_events):
         print("Creating Events..")
         events_dic, service, now = gc.get_events()
         for event in moodle_events:  # event is MoodleEvent object with attrs: name,date,time,status
-                if event.date > now:
+                if event.date >= now:
                         # events dic from Google Calendar
                         if event.date in events_dic:
                                 found_event = False
                                 for tuple in events_dic[event.date]:  # iterates over events on a specific date
                                         if event.name == tuple[0]:  # if current event summary exists in calendar
                                                 found_event = True
-                                                status = tuple[2] # status from calendar
+                                                status = tuple[2]  # status from calendar
                                                 if status == "None":
                                                     status = None  # set to None value instead of None string
-                                                if event.status != status:  # status changed 
+                                                if event.status != status:  # status changed
                                                     service.events().delete(calendarId='primary',
                                                                             eventId=tuple[3]).execute()
                                                     print("Event status changed -", event.name, event.date)
