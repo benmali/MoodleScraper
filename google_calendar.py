@@ -7,7 +7,7 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
 
 # If modifying these scopes, delete the file token.pickle.
-SCOPES = ['https://www.googleapis.com/auth/calendar',"https://www.googleapis.com/auth/calendar.events"]
+SCOPES = ['https://www.googleapis.com/auth/calendar', "https://www.googleapis.com/auth/calendar.events"]
 
 
 def get_events():
@@ -40,8 +40,8 @@ def get_events():
 
     print('Getting the upcoming 500 events')
     events_result = service.events().list(calendarId='primary', timeMin=now,
-                                        maxResults=500, singleEvents=True,
-                                        orderBy='startTime').execute()
+                                          maxResults=500, singleEvents=True,
+                                          orderBy='startTime').execute()
     events = events_result.get('items', [])
 
     if not events:
@@ -58,27 +58,35 @@ def get_events():
             desc = None
         date, time = s[0], s[1]
         if date in events_dic:
-            events_dic[date].append((summary, time,desc,event_id))  # add tuple of (summary,time)
+            events_dic[date].append((summary, time, desc, event_id))  # add tuple of (summary,time)
         else:
-            events_dic[date] = [(summary, time,desc,event_id)]
+            events_dic[date] = [(summary, time, desc, event_id)]
     return events_dic, service, now
 
 
-def create_event(event):
+def winter_summer_format(date):
+    year = date.split("-")[0]
+    if year + "-10-27" < date < str(int(year) + 1) + "-03-27":  # winter - tested on summer clock working! 24/10/20
+        return '{}T{}:00.000+03:00', '{}T{}:00.000+02:00'
+    else:
+        return '{}T{}:00.000+04:00', '{}T{}:00.000+03:00'  # summer
 
+
+def create_event(event):
+    start_format, end_format = winter_summer_format((event.date))
     my_event = {
         'summary': '{}'.format(event.name),
         'location': "",
         'description': '{}'.format(event.status),
         'start': {
-            'dateTime': '{}T{}:00.000+03:00'.format(event.date, event.time),
-            'timeZone': 'Israel',
+            'dateTime': start_format.format(event.date, event.time),
+            'timeZone': 'Asia/Jerusalem',
         },
         'end': {
-            'dateTime': '{}T{}:00.000+03:00'.format(event.date, event.time),
+            'dateTime': end_format.format(event.date, event.time),
             # So that's year, month, day,
             # the letter T, hours, minutes, seconds, miliseconds, + or -, timezoneoffset in hours and minutes
-            'timeZone': 'Israel',
+            'timeZone': 'Asia/Jerusalem',
         },
         'recurrence': [
             # 'RRULE:FREQ=DAILY;COUNT=1'

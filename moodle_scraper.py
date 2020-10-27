@@ -1,11 +1,11 @@
 import requests
-from bs4 import BeautifulSoup
-import events_db as db
 import google_calendar as gc
+from selenium.webdriver.chrome.options import Options
+import os
+import re
+from selenium import webdriver
+import datetime
 
-
-class HttpError(Exception):
-    pass
 
 
 class MoodleEvent:
@@ -19,111 +19,158 @@ class MoodleEvent:
         return "({}, {}, {}, {})".format(self.name, self.date, self.time, self.status)
 
 
-def moodle_tlv(username, user_id, password):
+def selenium_to_session(driver):
+    """
+    function takes Webdriver element, creates a Session object and returns it with the Cookies from the Webdriver
+    :param driver: WebDriver object
+    :return: Session object
+    """
+    session = requests.Session()
+    cookies_browser = driver.get_cookies()
+    c = [session.cookies.set(c['name'], c['value']) for c in cookies_browser]
+    return session
+
+
+def format_date(date):
+    """
+    create dd/mm/yyyy date to yyyy-mm-dd
+    :param date: string - date in dd/mm/yyyy format
+    :return: string  - date in yyyy-mm-dd format
+    """
+    new_date = date.split("/")[::-1]
+    for i in range(1, 3):
+        if len(new_date[i]) < 2:
+            new_date[i] = "0" + new_date[i]
+
+    return "-".join(new_date)
+
+
+def moodle_tlv(username, user_id, password, driver):
+    try:
         print("Fetching assignments from moodle..")
-        url = "https://moodle.tau.ac.il/login/index.php"
-        session = requests.session()
-        p = session.get(url)
-        p1 = session.get("https://moodle.tau.ac.il/auth/saml2/login.php")
-        soup = BeautifulSoup(p1.text,"html.parser")
-        token = str(soup.find('input', {'name': 'SAMLRequest'})["value"])
-        header = {"Content-Type": "application/x-www-form-urlencoded",
-                  "Referrer": "https://moodle.tau.ac.il/auth/saml2/login.php", "Origin": "https://moodle.tau.ac.il"}
-        payload = {'SAMLResponse': token, "RelayState": "https://moodle.tau.ac.il/auth/saml2/login.php"}
-        p2 = "https://nidp.tau.ac.il/nidp/saml2/sso"
-        a = session.post(p2, cookies=session.cookies, headers=header, data=payload)
-        p3 = "https://nidp.tau.ac.il/nidp/saml2/sso?sid=0&sid=0"
-        header = {"Content-Type": "application/x-www-form-urlencoded",
-                  "Origin": "https://nidp.tau.ac.il",
-                  "Referer": "https://nidp.tau.ac.il/nidp/saml2/sso?id=10&sid=0&option=credential&sid=0"}
-        payload = {"option": "credential", "Ecom_User_ID": username, "Ecom_User_Pid": user_id,
-                    "Ecom_Password": password}
-        b = session.post(p3, cookies=session.cookies, headers=header, data=payload)
-        c= session.get("https://nidp.tau.ac.il/nidp/saml2/sso?sid=0")
-        soup = BeautifulSoup(c.text,"html.parser")
-        token = str(soup.find('input', {'name': 'SAMLResponse'})["value"])
-        header = {"Content-Type": "application/x-www-form-urlencoded",
-                  "Origin": "https://nidp.tau.ac.il","Referer": "https://nidp.tau.ac.il/nidp/saml2/sso?sid=0"}
-        payload = {'SAMLResponse': token, "RelayState": "https://moodle.tau.ac.il/auth/saml2/login.php"}
-        d=session.post("https://moodle.tau.ac.il/auth/saml2/sp/saml2-acs.php/moodle.tau.ac.il", cookies=session.cookies, headers=header, data=payload)
+        driver.get("https://moodle.tau.ac.il/login/index.php")
+        driver.implicitly_wait(5)
+        f1 = driver.find_element_by_id("content")
+        driver.switch_to.frame(f1)
+        f2 = driver.find_element_by_id("credentials")
+        driver.implicitly_wait(5)
+        driver.switch_to.frame(f2)
+        unm = driver.find_element_by_name("Ecom_User_ID")
+        unm.send_keys(username)
+        uid = driver.find_element_by_name("Ecom_User_Pid")
+        uid.send_keys(user_id)
+        pw = driver.find_element_by_name("Ecom_Password")
+        pw.send_keys(password)
+        login = driver.find_element_by_class_name("subBottun")
+        login.click()
+        driver.get("https://moodle.tau.ac.il/login/index.php")
         # passed authentication
-        main = session.get("https://moodle.tau.ac.il/")
+        driver.get("https://moodle.tau.ac.il/")
+        print("Authentication Passed!")
+        session = selenium_to_session(driver)
+        s1 = session.get("https://moodle.tau.ac.il/")
+        print("Getting Courses..")
+        course_links = re.findall(r"(https://moodle\.tau\.ac\.il/course/view\.php\?id=[0-9]+)\" data-key", s1.text)
         moodle_events = []
+        for link in course_links:
+            driver.get(link)
+            course_page = driver.page_source
+            # course_name = re.findall(r"<title>(.*)</title>", course_page)[0]
+            course_assignments_links = re.findall(r"(https://moodle\.tau\.ac\.il/mod/assign/view\.php\?id=[0-9]+)\">",
+                                                  course_page)
+            for assignment_link in course_assignments_links:
+                driver.get(assignment_link)
+                assignment_page = driver.page_source
+                assignment_title = re.findall(r"<title>(.*)</title>", assignment_page)[0]
+                submission_full_date = re.findall("<th class=\"cell c0\" style=\"\" scope=\"row\">עד לתאריך</th>\n"
+                                                  "<td class=\"cell c1 lastcol\" style=\"\">(.*)</td>", assignment_page)
+                status = assignment_page.find("submissionstatussubmitted")
+                if status == -1:
+                    status = "Not Submitted"
+                else:
+                    status = "Submitted"
+                if submission_full_date:
+                    submission_date = format_date(submission_full_date[0].split(",")[0].strip())
+                    submission_hour = submission_full_date[0].split(",")[1].strip()
+                else:
+                    submission_date = "2020-12-31"
+                    submission_hour = "08:00"
 
-        soup = BeautifulSoup(main.text,"html.parser")
-        elements = soup.select(".courselink a") # finds all elements with class courselink in HTML file
-        links = [elements[i].get("href") for i in range(len(elements))]  # all the course links
-        pages = [BeautifulSoup(session.get(link).text, "html.parser") for link in links]  # actual course pages
-        for page in pages:
-            title = page.find("title").string
-            activities = page.select(".activityinstance a")  # All activities in course page
-            course_assignment_links = [task.get("href") for task in activities if
-                                      "https://moodle.tau.ac.il/mod/assign" in task.get("href")]  # only relevant links
-            course_assignment_pages = [BeautifulSoup(session.get(assignment).text, "html.parser") for assignment in
-                         course_assignment_links]  # actual assignment pages
+                moodle_events.append(MoodleEvent(assignment_title,
+                                                 submission_date,
+                                                 submission_hour,
+                                                 status))
 
-
-            for assignment_page in course_assignment_pages:  # course[1] is the assignment list for this course
-                status = assignment_page.find("td",class_="submissionstatussubmitted cell c1 lastcol")
-                tags = assignment_page.find_all("tr")
-                assignment_title = assignment_page.find("span", id="maincontent").findNext("h2").string
-                for date in tags:
-                    if "עד לתאריך" in str(date):
-                        nd = date.text.strip().split(",")
-                        date = db.fix_date_format(nd[0][9:].strip())
-                        time = nd[1][1:].strip()  # time
-                        # create MoodleEvent object and add to moodle_events list
-                        if status:  # status is None if assignments hasn't been submitted yet
-                            moodle_events.append(MoodleEvent(title + " " + assignment_title, date, time, status.text))
-                        else:
-                            moodle_events.append(MoodleEvent(title + " " + assignment_title, date, time, status))
-
-                        break
         return moodle_events
+
+    except:
+        print("Unexpected Error")
 
 
 def create_events(moodle_events):
-    try:
-        print("Creating Events..")
-        events_dic, service, now = gc.get_events()
-        for event in moodle_events:  # event is MoodleEvent object with attrs: name,date,time,status
-                if event.date >= now:
-                        # events dic from Google Calendar
-                        if event.date in events_dic:
-                                found_event = False
-                                for tuple in events_dic[event.date]:  # iterates over events on a specific date
-                                        if event.name == tuple[0]:  # if current event summary exists in calendar
-                                                found_event = True
-                                                status = tuple[2]  # status from calendar
-                                                if status == "None":
-                                                    status = None  # set to None value instead of None string
-                                                if event.status != status:  # status changed
-                                                    service.events().delete(calendarId='primary',
-                                                                            eventId=tuple[3]).execute()
-                                                    print("Event status changed -", event.name, event.date)
-                                                    # event deleted, set flag to false create a new one
-                                                    found_event = False
-                                                break  # event already exists, exit loop
+    print("Creating Events..")
+    events_dic, service, now = gc.get_events()
+    for event in moodle_events:  # event is MoodleEvent object with attrs: name,date,time,status
+        if event.date >= now:
+            # events dic from Google Calendar
+            if event.date in events_dic and event.time != "00:00":
+                for tuple in events_dic[event.date]:  # iterates over events on a specific date
+                    if event.name == tuple[0]:  # if current event summary exists in calendar
+                        status = tuple[2]  # status from calendar
+                        if event.status != status:  # status changed
+                            service.events().delete(calendarId='primary',
+                                                    eventId=tuple[3]).execute()
+                            print("Event status changed -", event.name, event.date)
+                            # event deleted, set flag to false create a new one
 
-                                if not found_event:
-                                        my_event = gc.create_event(event)
-                                        service.events().insert(calendarId='primary', body=my_event).execute()
-                                        print("New event created - ", event.name, event.date)
+                        else:
+                            break  # event already exists, exit loop
 
-                        else:  # date not in events dictionary
-                                if event.date > now:
-                                        my_event = gc.create_event(event)
-                                        service.events().insert(calendarId='primary', body=my_event).execute()
-                                        print("Created out of scope event", event.name, event.date)  # prints course name and date
-    except HttpError:
-        print("Failed to delete event")
+                        my_event = gc.create_event(event)
+                        service.events().insert(calendarId='primary', body=my_event).execute()
+                        print("New event created - ", event.name, event.date)
 
+            else:  # date not in events dictionary
+                # check for day before
+                event_date = datetime.datetime.strptime(event.date, '%Y-%m-%d')
+                day_before = event_date - datetime.timedelta(days=1)
+                day_before=str(day_before).split()[0]
+                create = True
+
+                if event.time == "00:00" and day_before in events_dic:
+                    for tuple in events_dic[day_before]:
+                        if event.name == tuple[0]:  # if current event summary exists in calendar
+                            status = tuple[2]  # status from calendar
+                            if event.status != status:  # status changed
+                                service.events().delete(calendarId='primary',
+                                                            eventId=tuple[3]).execute()
+                                print("Event status changed -", event.name, event.date)
+                                    # event deleted, set flag to false create a new one
+                            else:
+                                create = False
+                                break
+                if create:
+                    my_event = gc.create_event(event)
+                    service.events().insert(calendarId='primary', body=my_event).execute()
+                    print("Created out of scope event", event.name, event.date)  # prints course name and date
 
 
 if __name__ == "__main__":
-        # DB for testing
-        data = db.pull_db()
-        events = [MoodleEvent(event[0],event[1],event[2], event[3]) for event in data]
-        create_events( moodle_tlv("user","id","password"))
+    current_dir = os.getcwd()
+    chrome_driver_path = os.getcwd() + '\\chromedriver'
 
+    chrome_options = Options()
+    chrome_options.add_argument('--headless')
 
+    webdriver = webdriver.Chrome(
+        executable_path=chrome_driver_path, options=chrome_options
+    )
+    create_events(moodle_tlv("benmali", "204148225", "Bentel27", webdriver))
+    webdriver.close()
+    print("Done")
+    # event = gc.create_event(MoodleEvent("Test",'2020-10-24',"17:00","Tested!"))
+    # event2 = gc.create_event(MoodleEvent("Test2", '2020-10-29', "17:00", "Tested!"))
+    # events_dic, service, now = gc.get_events()
+    # service.events().insert(calendarId='primary', body=event).execute()
+    # service.events().insert(calendarId='primary', body=event2).execute()
+    #
