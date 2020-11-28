@@ -5,7 +5,7 @@ import os
 import re
 from selenium import webdriver
 import datetime
-
+import pandas as pd
 
 
 class MoodleEvent:
@@ -17,6 +17,16 @@ class MoodleEvent:
 
     def __repr__(self):
         return "({}, {}, {}, {})".format(self.name, self.date, self.time, self.status)
+
+
+def export_excel(moodle_events):
+    events = [[event.name, event.date, event.time, event.status] for event in moodle_events]
+    df1 = pd.DataFrame(events,
+                       index=[i for i in range(1, len(events) + 1)],
+                       columns=['name', "date", 'time', 'status']
+                       )
+    with pd.ExcelWriter('moodle.xlsx') as writer:
+        df1.to_excel(writer, sheet_name='Sheet_name_1')
 
 
 def selenium_to_session(driver):
@@ -113,7 +123,8 @@ def create_events(moodle_events):
     for event in moodle_events:  # event is MoodleEvent object with attrs: name,date,time,status
         if event.date >= now:
             # events dic from Google Calendar
-            if event.date in events_dic and event.time != "00:00":
+            if event.date in events_dic and event.time[:2] != "00":
+                found = False
                 for tuple in events_dic[event.date]:  # iterates over events on a specific date
                     if event.name == tuple[0]:  # if current event summary exists in calendar
                         status = tuple[2]  # status from calendar
@@ -121,31 +132,32 @@ def create_events(moodle_events):
                             service.events().delete(calendarId='primary',
                                                     eventId=tuple[3]).execute()
                             print("Event status changed -", event.name, event.date)
-                            # event deleted, set flag to false create a new one
+
 
                         else:
+                            found = True
                             break  # event already exists, exit loop
-
-                        my_event = gc.create_event(event)
-                        service.events().insert(calendarId='primary', body=my_event).execute()
-                        print("New event created - ", event.name, event.date)
+                if not found:
+                    my_event = gc.create_event(event)
+                    service.events().insert(calendarId='primary', body=my_event).execute()
+                    print("New event created - ", event.name, event.date)
 
             else:  # date not in events dictionary
                 # check for day before
                 event_date = datetime.datetime.strptime(event.date, '%Y-%m-%d')
                 day_before = event_date - datetime.timedelta(days=1)
-                day_before=str(day_before).split()[0]
+                day_before = str(day_before).split()[0]
                 create = True
 
-                if event.time == "00:00" and day_before in events_dic:
+                if event.time[:2] == "00" and day_before in events_dic:  # hour is 12am regardless of minutes
                     for tuple in events_dic[day_before]:
                         if event.name == tuple[0]:  # if current event summary exists in calendar
                             status = tuple[2]  # status from calendar
                             if event.status != status:  # status changed
                                 service.events().delete(calendarId='primary',
-                                                            eventId=tuple[3]).execute()
+                                                        eventId=tuple[3]).execute()
                                 print("Event status changed -", event.name, event.date)
-                                    # event deleted, set flag to false create a new one
+                                # event deleted, set flag to false create a new one
                             else:
                                 create = False
                                 break
@@ -165,7 +177,8 @@ if __name__ == "__main__":
     webdriver = webdriver.Chrome(
         executable_path=chrome_driver_path, options=chrome_options
     )
-    
+    create_events(moodle_tlv("benmali", "204148225", "Bentel27", webdriver))
+    #export_excel( moodle_tlv("benmali", "204148225", "Bentel27", webdriver))
     webdriver.close()
     print("Done")
     # event = gc.create_event(MoodleEvent("Test",'2020-10-24',"17:00","Tested!"))
