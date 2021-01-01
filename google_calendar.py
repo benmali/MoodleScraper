@@ -56,7 +56,10 @@ def get_events():
             desc = event['description']
         else:
             desc = None
-        date, time = s[0], s[1]
+        if len(s) >= 2:  # we have time for event
+            date, time = s[0], s[1]
+        else:  # no time for event
+            date, time = s[0], None
         if date in events_dic:
             events_dic[date].append((summary, time, desc, event_id))  # add tuple of (summary,time)
         else:
