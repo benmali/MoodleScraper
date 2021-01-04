@@ -121,8 +121,10 @@ def moodle_tlv(username, user_id, password, driver):
 def create_events(moodle_events):
     print("Creating Events..")
     events_dic, service, now = gc.get_events()
+    date_now = datetime.datetime.strptime(now.split("T")[0], '%Y-%m-%d')
     for event in moodle_events:  # event is MoodleEvent object with attrs: name,date,time,status
-        if event.date >= now:
+        moodle_event_date = datetime.datetime.strptime(event.date, '%Y-%m-%d')
+        if moodle_event_date >= date_now:
             # events dic from Google Calendar
             if event.date in events_dic and event.time[:2] != "00":
                 found = False
