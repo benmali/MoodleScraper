@@ -5,3 +5,4 @@ token.pickle
 events_db.py
 .idea
 meida ishi.py
+__pycache__
