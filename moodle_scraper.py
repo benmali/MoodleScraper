@@ -7,6 +7,8 @@ from selenium import webdriver
 import datetime
 import pandas as pd
 import json
+import time
+from selenium.webdriver.common.by import By
 
 
 class MoodleEvent:
@@ -61,22 +63,24 @@ def moodle_tlv(username, user_id, password, driver):
         print("Fetching assignments from moodle..")
         driver.get("https://moodle.tau.ac.il/login/index.php")
         driver.implicitly_wait(5)
-        unm = driver.find_element_by_name("Ecom_User_ID")
+        unm = driver.find_element(By.NAME, "Ecom_User_ID")
         unm.send_keys(username)
-        uid = driver.find_element_by_name("Ecom_User_Pid")
+        uid = driver.find_element(By.NAME, "Ecom_User_Pid")
         uid.send_keys(user_id)
-        pw = driver.find_element_by_name("Ecom_Password")
+        pw = driver.find_element(By.NAME, "Ecom_Password")
         pw.send_keys(password)
-        login = driver.find_element_by_name("loginButton2")
+        login = driver.find_element(By.NAME, "loginButton2")
         login.click()
         driver.get("https://moodle.tau.ac.il/login/index.php")
         # passed authentication
-        driver.get("https://moodle.tau.ac.il/")
+        time.sleep(3)
+        driver.get("https://moodle.tau.ac.il/my")
+        driver.implicitly_wait(30)
         print("Authentication Passed!")
-        session = selenium_to_session(driver)
-        s1 = session.get("https://moodle.tau.ac.il/")
-        print("Getting Courses..")
-        course_links = re.findall(r"(https://moodle\.tau\.ac\.il/course/view\.php\?id=[0-9]+)\" data-key", s1.text)
+        time.sleep(10)
+        s1 = driver.page_source
+        course_links = re.findall(r"(https://moodle\.tau\.ac\.il/course/view\.php\?id=[0-9]+)\"", s1)
+
         moodle_events = []
         for link in course_links:
             driver.get(link)
@@ -109,7 +113,8 @@ def moodle_tlv(username, user_id, password, driver):
 
         return moodle_events
 
-    except:
+    except Exception as e:
+        print(e)
         print("Unexpected Error")
 
 
@@ -123,12 +128,12 @@ def create_events(moodle_events):
             # events dic from Google Calendar
             if event.date in events_dic and event.time[:2] != "00":
                 found = False
-                for tuple in events_dic[event.date]:  # iterates over events on a specific date
-                    if event.name == tuple[0]:  # if current event summary exists in calendar
-                        status = tuple[2]  # status from calendar
+                for event_tuple in events_dic[event.date]:  # iterates over events on a specific date
+                    if event.name == event_tuple[0]:  # if current event summary exists in calendar
+                        status = event_tuple[2]  # status from calendar
                         if event.status != status:  # status changed
                             service.events().delete(calendarId='primary',
-                                                    eventId=tuple[3]).execute()
+                                                    eventId=event_tuple[3]).execute()
                             print("Event status changed -", event.name, event.date)
 
                         else:
@@ -147,12 +152,12 @@ def create_events(moodle_events):
                 create = True
 
                 if event.time[:2] == "00" and day_before in events_dic:  # hour is 12am regardless of minutes
-                    for tuple in events_dic[day_before]:
-                        if event.name == tuple[0]:  # if current event summary exists in calendar
-                            status = tuple[2]  # status from calendar
+                    for event_tuple in events_dic[day_before]:
+                        if event.name == event_tuple[0]:  # if current event summary exists in calendar
+                            status = event_tuple[2]  # status from calendar
                             if event.status != status:  # status changed
                                 service.events().delete(calendarId='primary',
-                                                        eventId=tuple[3]).execute()
+                                                        eventId=event_tuple[3]).execute()
                                 print("Event status changed -", event.name, event.date)
                                 # event deleted, set flag to false create a new one
                             else:
@@ -169,8 +174,22 @@ if __name__ == "__main__":
     chrome_driver_path = os.getcwd() + '\\chromedriver'
 
     chrome_options = Options()
-    chrome_options.add_argument('--headless')
+    chrome_options.add_argument("--no-sandbox")
+    chrome_options.add_argument("--window-size=1440, 900")
+    # chrome_options.add_argument("disable-blink-features=AutomationControlled")
+    chrome_options.add_argument("--disable-extensions")
+    chrome_options.add_argument("--allow-insecure-localhost")
+    chrome_options.add_argument("--incognito")
+    chrome_options.add_argument("disable-infobars")
+    chrome_options.add_argument("--disable-dev-shm-usage")
+    user_agent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) ' \
+                 'Chrome/92.0.4515.159 Safari/537.36 '
+    chrome_options.add_argument(f'user-agent={user_agent}')
 
+    chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
+    chrome_options.add_experimental_option('useAutomationExtension', False)
+
+    chrome_options.add_argument('--headless')
     webdriver = webdriver.Chrome(
         executable_path=chrome_driver_path, options=chrome_options
     )
@@ -189,4 +208,3 @@ if __name__ == "__main__":
     # events_dic, service, now = gc.get_events()
     # service.events().insert(calendarId='primary', body=event).execute()
     # service.events().insert(calendarId='primary', body=event2).execute()
-    #
